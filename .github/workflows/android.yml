@@ -22,28 +22,67 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up JDK 17 # MODIFIED: Changed from JDK 11 to JDK 17
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
-        java-version: '17' # MODIFIED
+        java-version: '17' # Updated to JDK 17
 
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
-      # This action sets up ANDROID_HOME and adds basic SDK tools to PATH.
-      # It might download newer command-line tools if it finds the pre-installed ones unsuitable.
-      # The error indicated the sdkmanager it used requires JDK 17.
+      # This action sets up ANDROID_HOME and should provide a modern sdkmanager.
 
-    - name: Install Android SDK Platforms, Build Tools, and Add-ons
+    - name: Install Android SDK Components (including legacy tools)
+      env:
+        ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }} # Make sure sdkmanager knows its root
       run: |
-        # Using yes to auto-accept licenses.
-        # project.properties specifies: target=Google Inc.:Google APIs:16
-        # Build tools 25.0.3 is chosen for better compatibility with older Ant projects for API 16.
-        # If you still have issues, you might need to experiment with different build-tools versions
-        # or install a specific version of command-line tools before this step.
-        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses # Accept licenses with the latest tools
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-16" "add-ons;addon-google_apis-google-16" "build-tools;25.0.3" "platform-tools"
+        SDK_MANAGER_CMD="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+        if [ ! -f "$SDK_MANAGER_CMD" ]; then
+          # Fallback if 'latest' isn't a symlink or directory in the expected structure
+          SDK_MANAGER_CMD=$(find "${ANDROID_HOME}/cmdline-tools" -name sdkmanager | sort -V | tail -n 1)
+          if [ -z "$SDK_MANAGER_CMD" ] || [ ! -f "$SDK_MANAGER_CMD" ]; then
+            echo "Error: sdkmanager not found in cmdline-tools after setup-android action."
+            exit 1
+          fi
+        fi
+        echo "Using sdkmanager at: $SDK_MANAGER_CMD"
 
+        echo "Attempting to accept licenses..."
+        yes | $SDK_MANAGER_CMD --licenses || echo "License acceptance might have had non-critical errors, proceeding."
+
+        echo "Installing legacy 'tools' and 'platform-tools' first..."
+        # Attempt to install the legacy 'tools' package. This is crucial for old Ant builds.
+        # --channel=0 ensures stable versions. If "tools" is not found, it might be unavailable via modern sdkmanager.
+        $SDK_MANAGER_CMD --channel=0 "tools" "platform-tools"
+
+        echo "Installing target platform and build-tools..."
+        $SDK_MANAGER_CMD "platforms;android-16" "add-ons;addon-google_apis-google-16" "build-tools;25.0.3"
+
+        echo "Verifying Ant build file presence..."
+        ANT_BUILD_FILE="${ANDROID_HOME}/tools/ant/build.xml"
+        if [ -f "$ANT_BUILD_FILE" ]; then
+          echo "SUCCESS: Found Ant build file: $ANT_BUILD_FILE"
+        else
+          echo "ERROR: Ant build file NOT found: $ANT_BUILD_FILE"
+          echo "Listing contents of ${ANDROID_HOME}..."
+          ls -la "${ANDROID_HOME}"
+          if [ -d "${ANDROID_HOME}/tools" ]; then
+            echo "Listing contents of ${ANDROID_HOME}/tools..."
+            ls -la "${ANDROID_HOME}/tools"
+            if [ -d "${ANDROID_HOME}/tools/ant" ]; then
+                echo "Listing contents of ${ANDROID_HOME}/tools/ant..."
+                ls -la "${ANDROID_HOME}/tools/ant"
+            else
+                echo "${ANDROID_HOME}/tools/ant directory does not exist."
+            fi
+          else
+            echo "${ANDROID_HOME}/tools directory does not exist."
+          fi
+          echo "The project's Ant build system requires the legacy file '${ANDROID_HOME}/tools/ant/build.xml'."
+          echo "This file is typically part of the older 'Android SDK Tools' package."
+          echo "If 'sdkmanager \"tools\"' did not create this file, the modern SDK manager might not support installing it in the legacy location."
+          exit 1
+        fi
 
     - name: Cache NDK
       id: cache-ndk
