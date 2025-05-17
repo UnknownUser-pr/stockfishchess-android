@@ -1,19 +1,17 @@
-name: Android CI Build
+name: Android CI Build (Manual Trigger)
 
 on:
-  push:
-    branches: [ "master", "main" ] # Adjust to your default branch if different
-  pull_request:
-    branches: [ "master", "main" ] # Adjust to your default branch if different
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions UI
+  # push: # Commented out to disable automatic push triggers
+  #   branches: [ "master", "main" ]
+  # pull_request: # Commented out to disable automatic pull request triggers
+  #   branches: [ "master", "main" ]
 
 env:
   # NDK version known to support stlport_static for armeabi-v7a.
   # r17c is the last NDK that included stlport.
-  # If r17c download fails, r16b is another option: https://dl.google.com/android/repository/android-ndk-r16b-linux-x86_64.zip
   NDK_VERSION_NAME: android-ndk-r17c
-  # The directory name after extraction from the NDK zip file
   NDK_EXTRACTED_DIR: android-ndk-r17c
-  # Path where NDK will be downloaded and extracted
   NDK_INSTALL_PATH: ${{ github.workspace }}/ndk_tools
 
 jobs:
@@ -24,24 +22,28 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up JDK 11
+    - name: Set up JDK 17 # MODIFIED: Changed from JDK 11 to JDK 17
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
-        java-version: '11'
+        java-version: '17' # MODIFIED
 
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
       # This action sets up ANDROID_HOME and adds basic SDK tools to PATH.
-      # We'll install specific platforms/build-tools via sdkmanager next.
+      # It might download newer command-line tools if it finds the pre-installed ones unsuitable.
+      # The error indicated the sdkmanager it used requires JDK 17.
 
     - name: Install Android SDK Platforms, Build Tools, and Add-ons
       run: |
         # Using yes to auto-accept licenses.
         # project.properties specifies: target=Google Inc.:Google APIs:16
         # Build tools 25.0.3 is chosen for better compatibility with older Ant projects for API 16.
-        # Adjust if build errors indicate a different version is needed.
-        echo "y" | sdkmanager "platforms;android-16" "add-ons;addon-google_apis-google-16" "build-tools;25.0.3" "platform-tools"
+        # If you still have issues, you might need to experiment with different build-tools versions
+        # or install a specific version of command-line tools before this step.
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses # Accept licenses with the latest tools
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-16" "add-ons;addon-google_apis-google-16" "build-tools;25.0.3" "platform-tools"
+
 
     - name: Cache NDK
       id: cache-ndk
@@ -64,20 +66,15 @@ jobs:
       run: |
         echo "NDK_ROOT=${{ env.NDK_INSTALL_PATH }}/${{ env.NDK_EXTRACTED_DIR }}" >> $GITHUB_ENV
         echo "${{ env.NDK_INSTALL_PATH }}/${{ env.NDK_EXTRACTED_DIR }}" >> $GITHUB_PATH
-        # Some older build systems might use ANDROID_NDK_HOME
         echo "ANDROID_NDK_HOME=${{ env.NDK_INSTALL_PATH }}/${{ env.NDK_EXTRACTED_DIR }}" >> $GITHUB_ENV
 
     - name: Create local.properties for Ant
-      # This file tells the Ant build system where the SDK and NDK are.
-      # It should be created in the root of the Android project (DroidFish directory).
       run: |
         echo "sdk.dir=${ANDROID_HOME}" > DroidFish/local.properties
         echo "ndk.dir=${NDK_ROOT}" >> DroidFish/local.properties
         echo "Created DroidFish/local.properties with SDK and NDK paths"
-      # working-directory defaults to GITHUB_WORKSPACE
 
     - name: Build DroidFish with Ant
-      # The Android project is in the DroidFish subdirectory.
       working-directory: DroidFish
       run: ant debug
 
@@ -86,4 +83,4 @@ jobs:
       with:
         name: DroidFish-debug
         path: DroidFish/bin/DroidFish-debug.apk
-        if-no-files-found: error # Fail if APK is not found
+        if-no-files-found: error
